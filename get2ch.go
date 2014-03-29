@@ -137,8 +137,6 @@ var hideboard = map[string]hideData{
 var RegServerItem = regexp.MustCompile(`<B>([^<]+)<\/B>`)
 var RegServer = regexp.MustCompile(`<A HREF=http:\/\/([^\/]+)\/([^\/]+)\/>([^<]+)<\/A>`)
 
-var HtmlTag = []string{"br", "font", "b"}
-
 type boardServerPacket struct {
 	board string
 	rch   chan<- string
