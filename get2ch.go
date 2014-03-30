@@ -701,9 +701,12 @@ func (g2ch *Get2ch) request(flag bool) (data []byte) {
 			} else {
 				// 多重書き込みを防ぐため早めに取得待機時間を延長しておく
 				g2ch.cache.SetMod(server, board, thread, timem, req_time)
-				// 1バイト引いて取得する
-				size := st.Size() - 1
-				req.Header.Set("Range", "bytes="+strconv.Itoa(int(size))+"-")
+				size := st.Size()
+				if size > 1 {
+					// 1バイト引いても差分取得ができる場合
+					// 1バイト引いて取得する
+					req.Header.Set("Range", "bytes="+strconv.Itoa(int(size-1))+"-")
+				}
 				req.Header.Set("If-Modified-Since", unlib.CreateModString(timem))
 			}
 		} else {
@@ -1045,8 +1048,8 @@ func lfCheck(data []byte) []byte {
 // 必ずSJIS-winの状態で渡す
 func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 	mod := g2ch.cache_mod
-	add := false
-	bourbon_renew := true
+	append_data := false
+	renew := true
 
 	if data == nil {
 		return errors.New("data nil")
@@ -1054,23 +1057,26 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 
 	switch switch_data {
 	case DAT_CREATE:
-		add = false
+		append_data = false
 		if g2ch.isThread() {
 			// スレッドの場合
 			// これから先にリクエストを送る必要がないか判断する
 			mod = g2ch.checkNoRequest(data, false)
 		}
 	case DAT_APPEND:
-		add = true
-		if bytes.Equal(data, []byte{'\n'}) {
-			data = []byte{}
+		if len(data) > 0 {
+			// データが存在するので追記
+			append_data = true
+		} else {
+			// データが更新されていない
+			renew = false
 		}
 	case DAT_BOURBON_THREAD:
-		add = false
+		append_data = false
 		if st, err := g2ch.cache.Stat(g2ch.server, g2ch.board, g2ch.thread); err == nil {
 			if int64(len(data)) <= st.Size() {
 				// データが更新されていない
-				bourbon_renew = false
+				renew = false
 			}
 		}
 		if g2ch.isThread() {
@@ -1084,10 +1090,10 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 		break
 	}
 
-	if bourbon_renew {
+	if renew {
 		// バーボン中ではない、またはデータが更新されている場合
 		// ファイルに書き込む
-		if add {
+		if append_data {
 			// 追記する
 			g2ch.cache.SetDataAppend(g2ch.server, g2ch.board, g2ch.thread, data) // 追記
 			if g2ch.isThread() {
