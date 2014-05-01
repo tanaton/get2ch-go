@@ -19,25 +19,15 @@ import (
 )
 
 const (
-	CONF_FOLDER      = "/2ch/dat"     // dat保管フォルダ名
 	CONF_ITAURL_HOST = "menu.2ch.net" // 板情報取得URL
 	CONF_ITAURL_FILE = "bbsmenu.html"
 	BOURBON_HOST     = "bg20.2ch.net" // 2chキャッシュサーバ
 
-	BOURBON_TIME    time.Duration = 1 * time.Minute
-	BOARD_NAME_TIME time.Duration = 24 * time.Hour
+	BOURBON_TIME time.Duration = 1 * time.Minute
 
-	DAT_CACHE_TIME_THREAD     = 20
-	DAT_CACHE_TIME_BOARD      = 7
-	DAT_MAX_SIZE              = 614400
-	DAT_NOT_REQUEST_ADD_MOD   = 157680000 // 5年間
-	DAT_NOT_REQUEST_RES_COUNT = 1000      // 1000レスを超えていたらリクエストしないようにする
-	DAT_NOT_SIZE_LIMIT        = 524288    // しきい値
-	DAT_NOT_RENEW_SEC         = 5184000   // 2ヶ月
+	DAT_MAX_SIZE = 614400
 
-	FILE_SUBJECT_TXT     = "subject.txt"
 	FILE_SUBJECT_TXT_REQ = "subject.txt"
-	FILE_SETTING_TXT     = "setting.txt"
 	FILE_SETTING_TXT_REQ = "SETTING.TXT"
 
 	VIEW_THREAD_LIST_SIZE = 100
@@ -159,6 +149,7 @@ var boardNameCh chan<- boardNamePacket
 var bbnCacheCh chan<- bbnCachePacket
 var g_cache Cache
 var g_salami string
+var g_user_agent string
 var g_started bool
 var tanpanman = []byte{0x92, 0x5A, 0x83, 0x70, 0x83, 0x93, 0x83, 0x7d, 0x83, 0x93, 0x20, 0x81, 0x9a}
 var nagoyaee = []byte{0x96, 0xBC, 0x8C, 0xC3, 0x89, 0xAE, 0x82, 0xCD, 0x83, 0x47, 0x81, 0x60, 0x83, 0x47, 0x81, 0x60, 0x82, 0xC5}
@@ -170,6 +161,7 @@ func Start(c Cache, s *Salami) {
 	g_once.Do(func() {
 		SetCache(c)
 		SetSalami(s)
+		SetUserAgent(USER_AGENT)
 		boardServerCh = boardServerListProc()
 		boardNameCh = boardNameProc()
 		bbnCacheCh = bbnCacheProc()
@@ -189,6 +181,10 @@ func SetCache(c Cache) {
 	if c != nil {
 		g_cache = c
 	}
+}
+
+func SetUserAgent(ua string) {
+	g_user_agent = ua
 }
 
 func boardServerListProc() chan<- boardServerPacket {
@@ -383,7 +379,7 @@ func getHttpBBSmenu(cache Cache) (data []byte, mod int64, err error) {
 	if nrerr != nil {
 		return nil, 0, nrerr
 	}
-	req.Header.Set("User-Agent", USER_AGENT)
+	req.Header.Set("User-Agent", g_user_agent)
 	// 更新確認
 	if st, merr := cache.Stat("", "", ""); merr == nil {
 		req.Header.Set("If-Modified-Since", unlib.CreateModString(st.Mmod()))
@@ -610,7 +606,7 @@ func (g2ch *Get2ch) getSettingFile() ([]byte, error) {
 	if nrerr != nil {
 		return nil, nrerr
 	}
-	req.Header.Set("User-Agent", USER_AGENT)
+	req.Header.Set("User-Agent", g_user_agent)
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("Connection", "close")
 	resp, doerr := client.Do(req)
@@ -682,33 +678,17 @@ func (g2ch *Get2ch) request(flag bool) (data []byte) {
 		if err != nil {
 			return
 		}
-		req.Header.Set("User-Agent", USER_AGENT)
+		req.Header.Set("User-Agent", g_user_agent)
 
 		st, err := g2ch.cache.Stat(server, board, thread)
 		if flag && err == nil {
-			timem := st.Mmod()
-			timea := st.Amod()
-			if req_time < timem {
-				// dat落ちしている場合
-				g2ch.code = 302
-				g2ch.cache_mod = timem
-				return
-			} else if (req_time < (timem + DAT_CACHE_TIME_THREAD)) || (req_time < (timea + DAT_CACHE_TIME_THREAD)) {
-				// 前回の取得から数秒しか経過していない場合
-				// 変更なしとする
-				g2ch.code = 429
-				return
-			} else {
-				// 多重書き込みを防ぐため早めに取得待機時間を延長しておく
-				g2ch.cache.SetMod(server, board, thread, timem, req_time)
-				size := st.Size()
-				if size > 1 {
-					// 1バイト引いても差分取得ができる場合
-					// 1バイト引いて取得する
-					req.Header.Set("Range", "bytes="+strconv.Itoa(int(size-1))+"-")
-				}
-				req.Header.Set("If-Modified-Since", unlib.CreateModString(timem))
+			size := st.Size()
+			if size > 1 {
+				// 1バイト引いても差分取得ができる場合
+				// 1バイト引いて取得する
+				req.Header.Set("Range", "bytes="+strconv.Itoa(int(size-1))+"-")
 			}
+			req.Header.Set("If-Modified-Since", unlib.CreateModString(st.Mmod()))
 		} else {
 			// 差分取得は使えないためここで設定
 			req.Header.Set("Accept-Encoding", "gzip")
@@ -719,20 +699,10 @@ func (g2ch *Get2ch) request(flag bool) (data []byte) {
 		if err != nil {
 			return
 		}
-		req.Header.Set("User-Agent", USER_AGENT)
+		req.Header.Set("User-Agent", g_user_agent)
 
 		if st, err := g2ch.cache.Stat(server, board, ""); err == nil {
-			timem := st.Mmod()
-			timea := st.Amod()
-			if (req_time < (timem + DAT_CACHE_TIME_BOARD)) || (req_time < (timea + DAT_CACHE_TIME_BOARD)) {
-				// 前回の取得から数秒しか経過していない場合
-				// 変更なしとする
-				g2ch.code = 429
-				return
-			}
-			// 早めに取得待機時間を延長しておく
-			g2ch.cache.SetMod(server, board, "", timem, req_time)
-			req.Header.Set("If-Modified-Since", unlib.CreateModString(timem))
+			req.Header.Set("If-Modified-Since", unlib.CreateModString(st.Mmod()))
 		}
 		req.Header.Set("Accept-Encoding", "gzip")
 	} else {
@@ -829,7 +799,7 @@ func (g2ch *Get2ch) bourbonRequest() (data []byte) {
 	} else {
 		return strerr
 	}
-	req.Header.Set("User-Agent", USER_AGENT)
+	req.Header.Set("User-Agent", g_user_agent)
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("Connection", "close")
 
@@ -861,7 +831,6 @@ func (g2ch *Get2ch) normalData(reget bool) []byte {
 	var err error
 	// データ取得
 	data := g2ch.request(reget)
-	time := g2ch.req_time
 	if g2ch.isThread() {
 		switch g2ch.code {
 		case 200:
@@ -890,12 +859,6 @@ func (g2ch *Get2ch) normalData(reget bool) []byte {
 					data, _ = g2ch.cache.GetData(g2ch.server, g2ch.board, g2ch.thread)
 					// バーボンキャッシュ更新
 					g2ch.updateBourbonCache(g2ch.bourbon)
-					if g2ch.bourbon == false && g2ch.mod <= time {
-						// バーボン状態でなければ5年後まで読みに行かないようにする
-						mod := time + DAT_NOT_REQUEST_ADD_MOD
-						g2ch.cache.SetMod(g2ch.server, g2ch.board, g2ch.thread, mod, mod)
-						g2ch.mod = mod
-					}
 				} else {
 					data = g2ch.dataError()
 				}
@@ -930,37 +893,7 @@ func (g2ch *Get2ch) normalData(reget bool) []byte {
 }
 
 func (g2ch *Get2ch) bourbonData() (data []byte) {
-	time := g2ch.req_time
 	g2ch.bourbon = true
-
-	// タイムスタンプがいじられている場合、見に行かない
-	if st, staterr := g2ch.cache.Stat(g2ch.server, g2ch.board, g2ch.thread); staterr == nil {
-		timem := st.Mmod()
-		if time < timem {
-			// 現在時刻よりもファイルの更新時刻のほうが大きい場合
-			// dat落ちしていることとする
-			g2ch.code = 302
-			g2ch.mod = timem
-			g2ch.size = st.Size()
-			if g2ch.size < DAT_MAX_SIZE {
-				data, _ = g2ch.cache.GetData(g2ch.server, g2ch.board, g2ch.thread)
-			} else {
-				data = g2ch.dataError()
-			}
-			return
-		} else if time < (timem + DAT_CACHE_TIME_THREAD) {
-			// 前回の取得から数秒しか経過していない場合
-			g2ch.code = 429
-			g2ch.mod = timem
-			g2ch.size = st.Size()
-			if g2ch.size < DAT_MAX_SIZE {
-				data, _ = g2ch.cache.GetData(g2ch.server, g2ch.board, g2ch.thread)
-			} else {
-				data = g2ch.dataError()
-			}
-			return
-		}
-	}
 
 	if strings.Contains(g2ch.server, ".bbspink.com") {
 		// BBSPINKだった場合
@@ -982,10 +915,6 @@ func (g2ch *Get2ch) bourbonData() (data []byte) {
 			g2ch.size = st.Size()
 			if g2ch.size < DAT_MAX_SIZE {
 				data, _ = g2ch.cache.GetData(g2ch.server, g2ch.board, g2ch.thread)
-				if g2ch.isThread() {
-					// これから先にリクエストを送る必要がないか判断する
-					g2ch.checkNoRequest(data, true)
-				}
 			} else {
 				data = g2ch.dataError()
 			}
@@ -1058,11 +987,6 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 	switch switch_data {
 	case DAT_CREATE:
 		append_data = false
-		if g2ch.isThread() {
-			// スレッドの場合
-			// これから先にリクエストを送る必要がないか判断する
-			mod = g2ch.checkNoRequest(data, false)
-		}
 	case DAT_APPEND:
 		if len(data) > 0 {
 			// データが存在するので追記
@@ -1079,11 +1003,6 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 				renew = false
 			}
 		}
-		if g2ch.isThread() {
-			// スレッドの場合
-			// これから先にリクエストを送る必要がないか判断する
-			mod = g2ch.checkNoRequest(data, false)
-		}
 		break
 	default:
 		// 何もしない
@@ -1096,13 +1015,6 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 		if append_data {
 			// 追記する
 			g2ch.cache.SetDataAppend(g2ch.server, g2ch.board, g2ch.thread, data) // 追記
-			if g2ch.isThread() {
-				// これから先にリクエストを送る必要がないか判断する
-				var err error
-				if data, err = g2ch.cache.GetData(g2ch.server, g2ch.board, g2ch.thread); err == nil {
-					mod = g2ch.checkNoRequest(data, false)
-				}
-			}
 		} else {
 			g2ch.cache.SetData(g2ch.server, g2ch.board, g2ch.thread, data) // 上書き
 		}
@@ -1118,33 +1030,6 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 		}
 	}
 	return nil
-}
-
-func (g2ch *Get2ch) checkNoRequest(data []byte, flag bool) int64 {
-	mod := g2ch.cache_mod
-
-	if g2ch.isThread() {
-		// スレッドの場合
-		cacheflag := false
-
-		if g2ch.NumLines(data) >= DAT_NOT_REQUEST_RES_COUNT {
-			// 1000res以上
-			cacheflag = true
-		} else if len(data) > DAT_NOT_SIZE_LIMIT {
-			// 512kbyteよりも大きい
-			cacheflag = true
-		}
-
-		if cacheflag {
-			// 5年後まで読みに行かないようにする
-			mod = g2ch.req_time + DAT_NOT_REQUEST_ADD_MOD
-			if flag {
-				// 未来の時間を設定する
-				g2ch.cache.SetMod(g2ch.server, g2ch.board, g2ch.thread, mod, mod)
-			}
-		}
-	}
-	return mod
 }
 
 func (g2ch *Get2ch) getBourbonCache() (bourbon bool) {
