@@ -191,7 +191,7 @@ func boardServerListProc() chan<- boardServerPacket {
 	wch := make(chan boardServerPacket, 4)
 	go func(wch <-chan boardServerPacket) {
 		m := setServerList()
-		c := time.Tick(5 * time.Minute)
+		c := time.Tick(1 * time.Hour)
 		for {
 			select {
 			case <-c:
@@ -484,13 +484,9 @@ func (g2ch *Get2ch) GetServer(board_key string) string {
 }
 
 func setServerList() map[string]string {
-	var data []byte
 	m := make(map[string]string, 1024)
 	cache := g_cache
-	if cache.Exists("", "", "") == false {
-		// 存在しない場合取得する
-		data = saveBBSmenu(cache)
-	}
+	data := saveBBSmenu(cache)
 	if data == nil {
 		var err error
 		data, err = cache.GetData("", "", "")
