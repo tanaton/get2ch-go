@@ -771,7 +771,7 @@ func (g2ch *Get2ch) bourbonRequest() (data []byte) {
 	server := g2ch.server
 	board := g2ch.board
 	thread := g2ch.thread
-	strerr := append([]byte{}, tanpanman...)
+	strerr := append(make([]byte, 0, len(tanpanman)), tanpanman...)
 
 	if server == "" {
 		// サーバが分からない
@@ -893,12 +893,12 @@ func (g2ch *Get2ch) bourbonData() (data []byte) {
 
 	if strings.Contains(g2ch.server, ".bbspink.com") {
 		// BBSPINKだった場合
-		data = append([]byte{}, tanpanman...)
+		data = append(make([]byte, 0, len(tanpanman)), tanpanman...)
 	} else {
 		data = g2ch.bourbonRequest()
 	}
-	tp := append([]byte{}, tanpanman...)
-	ne := append([]byte{}, nagoyaee...)
+	tp := append(make([]byte, 0, len(tanpanman)), tanpanman...)
+	ne := append(make([]byte, 0, len(nagoyaee)), nagoyaee...)
 	checklen := len(data)
 	if checklen > 1024 {
 		checklen = 1024
