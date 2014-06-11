@@ -1,7 +1,7 @@
 package get2ch
 
 import (
-	"./unlib"
+	"github.com/tanaton/get2ch-go/unlib"
 	"io/ioutil"
 	"os"
 	"path"

@@ -1,12 +1,13 @@
 package get2ch
 
 import (
-	"./unlib"
 	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
+	"github.com/tanaton/get2ch-go/process"
+	"github.com/tanaton/get2ch-go/unlib"
 	"io"
 	"io/ioutil"
 	"net"
@@ -19,22 +20,14 @@ import (
 )
 
 const (
-	CONF_ITAURL_HOST = "menu.2ch.net" // 板情報取得URL
-	CONF_ITAURL_FILE = "bbsmenu.html"
-	BOURBON_HOST     = "bg20.2ch.net" // 2chキャッシュサーバ
-
-	BOURBON_TIME time.Duration = 1 * time.Minute
-
-	DAT_MAX_SIZE = 614400
-
+	CONF_ITAURL_HOST     = "menu.2ch.net" // 板情報取得URL
+	CONF_ITAURL_FILE     = "bbsmenu.html"
 	FILE_SUBJECT_TXT_REQ = "subject.txt"
 	FILE_SETTING_TXT_REQ = "SETTING.TXT"
-
-	VIEW_THREAD_LIST_SIZE = 100
-
-	TIMEOUT_SEC time.Duration = 12 * time.Second
-
-	USER_AGENT = "Monazilla/1.00 (get2ch-go)"
+	BOURBON_HOST         = "bg20.2ch.net" // 2chキャッシュサーバ
+	TIMEOUT_SEC          = 12 * time.Second
+	DAT_MAX_SIZE         = 614400
+	USER_AGENT           = "Monazilla/1.00 (get2ch-go)"
 )
 
 const (
@@ -126,27 +119,10 @@ var hideboard = map[string]hideData{
 
 var RegServerItem = regexp.MustCompile(`<B>([^<]+)<\/B>`)
 var RegServer = regexp.MustCompile(`<A HREF=http:\/\/([^\/]+)\/([^\/]+)\/>([^<]+)<\/A>`)
-
-type boardServerPacket struct {
-	board string
-	rch   chan<- string
-}
-
-type boardNamePacket struct {
-	board string
-	name  string
-	rch   chan<- string
-}
-
-type bbnCachePacket struct {
-	key string
-	rch chan<- bool
-}
-
 var g_once sync.Once
-var boardServerCh chan<- boardServerPacket
-var boardNameCh chan<- boardNamePacket
-var bbnCacheCh chan<- bbnCachePacket
+var boardServerObj *process.BoardServerBox
+var boardNameObj *process.BoardNameBox
+var bbnCacheObj *process.BBNCacheBox
 var g_cache Cache
 var g_salami string
 var g_user_agent string
@@ -162,9 +138,9 @@ func Start(c Cache, s *Salami) {
 		SetCache(c)
 		SetSalami(s)
 		SetUserAgent(USER_AGENT)
-		boardServerCh = boardServerListProc()
-		boardNameCh = boardNameProc()
-		bbnCacheCh = bbnCacheProc()
+		boardServerObj = process.NewBoardServerBox(setServerList)
+		boardNameObj = process.NewBoardNameBox()
+		bbnCacheObj = process.NewBBNCacheBox()
 		g_started = true
 	})
 }
@@ -185,71 +161,6 @@ func SetCache(c Cache) {
 
 func SetUserAgent(ua string) {
 	g_user_agent = ua
-}
-
-func boardServerListProc() chan<- boardServerPacket {
-	wch := make(chan boardServerPacket, 4)
-	go func(wch <-chan boardServerPacket) {
-		m := setServerList()
-		c := time.Tick(1 * time.Hour)
-		for {
-			select {
-			case <-c:
-				m = setServerList()
-			case it := <-wch:
-				if it.rch != nil {
-					it.rch <- m[it.board]
-				}
-			}
-		}
-	}(wch)
-	return wch
-}
-
-func boardNameProc() chan<- boardNamePacket {
-	reqch := make(chan boardNamePacket, 4)
-	go func(reqch <-chan boardNamePacket) {
-		m := make(map[string]string)
-		for it := range reqch {
-			if it.rch != nil {
-				// 返信
-				it.rch <- m[it.board]
-			} else {
-				m[it.board] = it.name
-			}
-		}
-	}(reqch)
-	return reqch
-}
-
-func bbnCacheProc() chan<- bbnCachePacket {
-	reqch := make(chan bbnCachePacket, 4)
-	go func(reqch <-chan bbnCachePacket) {
-		now := time.Now()
-		c := time.Tick(5 * time.Second)
-		cm := make(map[string]time.Time)
-		for {
-			select {
-			case now = <-c: // 更新
-			case it := <-reqch:
-				if it.rch != nil {
-					t, ok := cm[it.key]
-					if ok {
-						if now.After(t) {
-							// 期間経過
-							delete(cm, it.key)
-							ok = false
-						}
-					}
-					it.rch <- ok
-				} else {
-					// バーボン期間設定
-					cm[it.key] = now.Add(BOURBON_TIME)
-				}
-			}
-		}
-	}(reqch)
-	return reqch
 }
 
 func NewGet2ch(board, thread string) *Get2ch {
@@ -472,13 +383,7 @@ func (g2ch *Get2ch) GetServer(board_key string) string {
 	if board_key == "" {
 		retdata = g2ch.server
 	} else {
-		ch := make(chan string, 1) // バッファが無いと低速？
-		boardServerCh <- boardServerPacket{
-			board: board_key,
-			rch:   ch,
-		}
-		retdata = <-ch
-		close(ch)
+		retdata = boardServerObj.GetServer(board_key)
 	}
 	return retdata
 }
@@ -544,29 +449,16 @@ func getBoardNameSub(bd string) string {
 
 // 板名取得
 func (g2ch *Get2ch) GetBoardName() (boardname string) {
-	ch := make(chan string, 1) // バッファが無いと低速？
-	rbnp := boardNamePacket{
-		board: g2ch.board,
-		rch:   ch,
-	}
 	// 板名マップの探索
-	boardNameCh <- rbnp
-	// 受信
-	boardname = <-ch
-	close(ch)
+	boardname = boardNameObj.GetName(g2ch.board)
 
 	if boardname == "" {
 		boardname = g2ch.sliceBoardName()
 		if boardname == "" {
 			boardname = getBoardNameSub(g2ch.board)
 		}
-
-		bnp := boardNamePacket{
-			board: g2ch.board,
-			name:  boardname,
-		}
 		// 空白でも登録
-		boardNameCh <- bnp
+		boardNameObj.SetName(g2ch.board, boardname)
 	}
 	return
 }
@@ -1028,23 +920,13 @@ func (g2ch *Get2ch) createCache(data []byte, switch_data int) error {
 	return nil
 }
 
-func (g2ch *Get2ch) getBourbonCache() (bourbon bool) {
-	ch := make(chan bool, 1) // バッファが無いと低速？
-	bbnCacheCh <- bbnCachePacket{
-		key: g2ch.salami,
-		rch: ch,
-	}
-	bourbon = <-ch
-	close(ch)
-	return
+func (g2ch *Get2ch) getBourbonCache() bool {
+	return bbnCacheObj.GetBourbon(g2ch.salami)
 }
 
 func (g2ch *Get2ch) updateBourbonCache(bin bool) {
 	if bin {
-		// バーボン状態
-		bbnCacheCh <- bbnCachePacket{
-			key: g2ch.salami,
-		}
+		bbnCacheObj.SetBourbon(g2ch.salami)
 	}
 }
 
