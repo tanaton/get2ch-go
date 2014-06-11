@@ -187,7 +187,7 @@ func NewGet2ch(board, thread string) (*Get2ch, error) {
 	if _, err := strconv.ParseInt(thread, 10, 64); err == nil {
 		g2ch.thread = thread
 	}
-	return g2ch
+	return g2ch, nil
 }
 
 func (g2ch *Get2ch) GetData() (data []byte, err error) {
