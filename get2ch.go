@@ -163,9 +163,9 @@ func SetUserAgent(ua string) {
 	g_user_agent = ua
 }
 
-func NewGet2ch(board, thread string) *Get2ch {
+func NewGet2ch(board, thread string) (*Get2ch, error) {
 	if g_started == false {
-		return nil
+		return nil, errors.New("初期化されていません。")
 	}
 	g2ch := &Get2ch{
 		size:      0,

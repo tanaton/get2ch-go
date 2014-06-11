@@ -122,7 +122,7 @@ func mainThread(key string, bl []Nich, killch chan struct{}) {
 
 func getServer() map[string][]Nich {
 	var nich Nich
-	get := get2ch.NewGet2ch("", "")
+	get, _ := get2ch.NewGet2ch("", "")
 	sl := make(map[string][]Nich, 16)
 	// 更新時間を取得しない
 	data := get.GetBBSmenu(false)
@@ -151,7 +151,7 @@ func getServer() map[string][]Nich {
 
 func getBoard(nich Nich) []Nich {
 	h := threadResList(nich)
-	get := get2ch.NewGet2ch(nich.board, "")
+	get, _ := get2ch.NewGet2ch(nich.board, "")
 	data, err := get.GetData()
 	if err != nil {
 		gLogger.Printf(err.Error() + "\n")
@@ -208,7 +208,7 @@ func threadResList(nich Nich) map[string]int {
 
 func getThread(tl []Nich, board string, killch chan struct{}) {
 	for _, nich := range tl {
-		get := get2ch.NewGet2ch(nich.board, nich.thread)
+		get, _ := get2ch.NewGet2ch(nich.board, nich.thread)
 		_, err := get.GetData()
 		if err != nil {
 			gLogger.Println(err)
